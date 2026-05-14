@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Autodrive HITL Core",
   "version": "2.4.0",
-  "description": "Engine de automação inteligente com HITL + Autodrive - Arquitetura profissional",
+  "description": "Engine de automacao inteligente com HITL + Autodrive - Arquitetura profissional",
   "permissions": [
     "activeTab",
     "storage",
@@ -14,8 +14,10 @@
     "*://*.betboom.bet.br/*",
     "*://br.betboom.com/*",
     "*://*.betboom.mx/*",
+    "*://*.billing-boom.com/*",
     "*://*.evo-games.com/*",
-    "*://*.evolution.com/*"
+    "*://*.evolution.com/*",
+    "*://*.evolutiongaming.com/*"
   ],
   "action": {
     "default_popup": "popup.html",
@@ -52,13 +54,33 @@
         "js/content.js"
       ],
       "css": ["css/overlay.css"],
-      "run_at": "document_start"
+      "run_at": "document_start",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "*://*.billing-boom.com/*",
+        "*://*.evo-games.com/*",
+        "*://*.evolution.com/*",
+        "*://*.evolutiongaming.com/*"
+      ],
+      "js": [
+        "js/injected.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
     }
   ],
   "web_accessible_resources": [
     {
       "resources": ["js/injected.js"],
-      "matches": ["*://*.betboom.com/*"]
+      "matches": [
+        "*://*.betboom.com/*",
+        "*://*.betboom.bet.br/*",
+        "*://*.billing-boom.com/*",
+        "*://*.evo-games.com/*",
+        "*://*.evolution.com/*"
+      ]
     }
   ],
   "icons": {
