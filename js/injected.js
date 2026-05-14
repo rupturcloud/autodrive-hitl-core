@@ -1,235 +1,198 @@
 /**
- * Autodrive HITL Core - Injected Script v2.4
- * Script injetado via chrome.scripting.executeScript ou world: MAIN
- * Executa no contexto da página para acessar objetos do jogo diretamente
- * Comunicação com content.js via window.postMessage
+ * Autodrive HITL Core - injected.js v2.4
+ * Roda como content script DENTRO do iframe do jogo (billing-boom.com / evolution)
+ * Extrai resultados do DOM do jogo e envia para o frame pai (betboom.bet.br)
+ * via window.top.postMessage
  */
 
 (() => {
   'use strict';
 
-  const CHANNEL = 'AUTODRIVE_HITL_INJECTED';
   const VERSION = '2.4.0';
+  const MSG_SOURCE = 'AUTODRIVE_IFRAME_AGENT';
 
-  let isInitialized = false;
-  let gameObserver = null;
+  // Intervalo de polling em ms
+  const POLL_INTERVAL = 1500;
+
+  let lastResultCount = 0;
+  let observer = null;
+  let pollTimer = null;
 
   /**
-   * Envia mensagem para o content.js
-   * @param {string} type - Tipo da mensagem
-   * @param {Object} payload - Dados a enviar
+   * Envia dados para o content script no frame pai
    */
-  function postToExtension(type, payload = {}) {
-    window.postMessage({
-      source: CHANNEL,
-      type,
-      payload,
-      timestamp: Date.now(),
-      version: VERSION
-    }, '*');
+  function sendToParent(type, payload) {
+    try {
+      window.top.postMessage({
+        source: MSG_SOURCE,
+        type: type,
+        payload: payload,
+        timestamp: Date.now(),
+        version: VERSION
+      }, '*');
+    } catch(e) {
+      // Pode falhar por restricoes de cross-origin em alguns modos
+    }
   }
 
   /**
-   * Extrai estado atual do jogo diretamente dos objetos da página
-   * Tenta múltiplas estratégias para diferentes plataformas
-   * @returns {Object|null} Estado do jogo ou null se não encontrado
+   * Estrategias de extracao do Bac Bo / Evolution Gaming
+   * O Bac Bo mostra resultados como bolinhas coloridas no road map
    */
-  function extractGameState() {
-    // Estratégia 1: Objeto global do jogo
-    const gameObjects = [
-      window.game, window.Game, window.GameState,
-      window.baccaratGame, window.liveGame,
-      window.__game, window.__state, window.gameData
-    ];
+  function extractResults() {
+    const results = [];
 
-    for (const obj of gameObjects) {
-      if (obj && typeof obj === 'object') {
-        try {
-          const state = {
-            results: extractResults(obj),
-            currentRound: obj.round || obj.currentRound || obj.roundNumber || null,
-            betOptions: extractBetOptions(obj),
-            status: obj.status || obj.state || obj.gameStatus || null
-          };
-          if (state.results && state.results.length > 0) {
-            return state;
-          }
-        } catch (e) {
-          // Continue to next strategy
+    // === Estrategia 1: Bead Road (Estrada de Contas) ===
+    // Evolution usa SVG circles com fill colorido para o historico
+    const svgCircles = document.querySelectorAll('svg circle[fill], svg ellipse[fill]');
+    if (svgCircles.length > 0) {
+      svgCircles.forEach(circle => {
+        const fill = (circle.getAttribute('fill') || '').toLowerCase();
+        if (fill.includes('blue') || fill === '#0000ff' || fill === '#1e90ff' || fill.includes('3b82f6')) {
+          results.push('P'); // Player = Azul
+        } else if (fill.includes('red') || fill === '#ff0000' || fill === '#ef4444') {
+          results.push('B'); // Banker = Vermelho
+        } else if (fill.includes('green') || fill === '#00ff00' || fill === '#22c55e') {
+          results.push('T'); // Tie = Verde
         }
+      });
+    }
+
+    // === Estrategia 2: Classes CSS dos resultados ===
+    if (results.length === 0) {
+      const playerEls = document.querySelectorAll(
+        '[class*="player"][class*="win"], [class*="Player"], [data-outcome="player"], [class*="blue-ball"], [class*="blueBall"]'
+      );
+      const bankerEls = document.querySelectorAll(
+        '[class*="banker"][class*="win"], [class*="Banker"], [data-outcome="banker"], [class*="red-ball"], [class*="redBall"]'
+      );
+      const tieEls = document.querySelectorAll(
+        '[class*="tie"], [class*="Tie"], [data-outcome="tie"], [class*="green-ball"], [class*="greenBall"]'
+      );
+
+      const maxLen = Math.max(playerEls.length, bankerEls.length, tieEls.length);
+      if (maxLen > 0) {
+        // Combinar em ordem aproximada
+        playerEls.forEach(() => results.push('P'));
+        bankerEls.forEach(() => results.push('B'));
+        tieEls.forEach(() => results.push('T'));
       }
     }
 
-    // Estratégia 2: Redux/Zustand store
-    try {
-      const store = window.__REDUX_STORE__ || window.store;
-      if (store && store.getState) {
-        const state = store.getState();
-        if (state.game || state.baccarat || state.live) {
-          return { source: 'redux', state: state.game || state.baccarat || state.live };
-        }
+    // === Estrategia 3: texto no DOM ===
+    if (results.length === 0) {
+      const allText = document.body.innerText || '';
+      const matches = allText.match(/\b(Player|Banker|Tie|PLAYER|BANKER|TIE|Jogador|Banca|Empate)\b/g);
+      if (matches) {
+        matches.forEach(m => {
+          const lower = m.toLowerCase();
+          if (lower.includes('player') || lower.includes('jogador')) results.push('P');
+          else if (lower.includes('banker') || lower.includes('banca')) results.push('B');
+          else if (lower.includes('tie') || lower.includes('empate')) results.push('T');
+        });
       }
-    } catch (e) {}
+    }
 
-    // Estratégia 3: DOM parsing (fallback)
-    return extractFromDOM();
+    return results;
   }
 
   /**
-   * Extrai resultados de um objeto de jogo
-   * @param {Object} gameObj
-   * @returns {Array|null}
+   * Extrai o resultado da ultima rodada (mais recente)
    */
-  function extractResults(gameObj) {
-    const possibleKeys = ['results', 'history', 'rounds', 'outcomes', 'gameHistory', 'roundHistory'];
-    for (const key of possibleKeys) {
-      if (Array.isArray(gameObj[key]) && gameObj[key].length > 0) {
-        return gameObj[key];
-      }
+  function extractLatestResult() {
+    // Bac Bo especificamente: resultado e mostrado com texto grande apos cada rodada
+    const bigResult = document.querySelector(
+      '[class*="result"][class*="display"], [class*="roundResult"], [class*="gameResult"], [class*="outcomeLabel"]'
+    );
+    if (bigResult) {
+      const text = bigResult.textContent.trim().toLowerCase();
+      if (text.includes('player') || text.includes('jogador')) return { result: 'P', source: 'bigDisplay' };
+      if (text.includes('banker') || text.includes('banca')) return { result: 'B', source: 'bigDisplay' };
+      if (text.includes('tie') || text.includes('empate')) return { result: 'T', source: 'bigDisplay' };
     }
     return null;
   }
 
   /**
-   * Extrai opções de aposta disponíveis
-   * @param {Object} gameObj
-   * @returns {Object}
+   * Verifica se o jogo esta aceitando apostas (betting phase)
    */
-  function extractBetOptions(gameObj) {
-    return {
-      playerEnabled: !gameObj.playerDisabled && gameObj.bettingOpen !== false,
-      bankerEnabled: !gameObj.bankerDisabled && gameObj.bettingOpen !== false,
-      tieEnabled: !gameObj.tieDisabled && gameObj.bettingOpen !== false,
-      bettingOpen: gameObj.bettingOpen !== false
-    };
-  }
-
-  /**
-   * Extrai estado do jogo a partir do DOM
-   * @returns {Object}
-   */
-  function extractFromDOM() {
-    const historyEls = document.querySelectorAll(
-      '.game-history td, .round-result, .history-item, .road-map td, .bead-road td'
+  function isBettingPhase() {
+    // Evolution mostra botao de aposta habilitado durante fase de aposta
+    const betButtons = document.querySelectorAll(
+      '[class*="player-bet"]:not([disabled]), [class*="banker-bet"]:not([disabled]), button[class*="bet"]:not([disabled])'
     );
-
-    if (historyEls.length === 0) return null;
-
-    const results = [];
-    historyEls.forEach(el => {
-      const text = el.textContent.trim().toUpperCase();
-      const cls = el.className.toLowerCase();
-
-      if (text === 'W' || text === 'P' || cls.includes('player') || cls.includes('blue')) {
-        results.push({ result: 'W', source: 'dom' });
-      } else if (text === 'L' || text === 'B' || cls.includes('banker') || cls.includes('red')) {
-        results.push({ result: 'L', source: 'dom' });
-      } else if (text === 'T' || cls.includes('tie') || cls.includes('green')) {
-        results.push({ result: 'T', source: 'dom' });
-      }
-    });
-
-    return results.length > 0 ? { results, source: 'dom' } : null;
+    return betButtons.length > 0;
   }
 
   /**
-   * Inicia observação do DOM para detectar novos resultados
+   * Loop principal de monitoramento
    */
-  function startGameObserver() {
-    if (gameObserver) gameObserver.disconnect();
+  function monitorGame() {
+    const results = extractResults();
+    const latestResult = extractLatestResult();
+    const bettingPhase = isBettingPhase();
 
-    let lastResultCount = 0;
+    // Envia atualizacao apenas se houve mudanca no numero de resultados
+    if (results.length !== lastResultCount || latestResult) {
+      lastResultCount = results.length;
 
-    gameObserver = new MutationObserver((mutations) => {
-      let hasGameChange = false;
+      sendToParent('GAME_DATA_UPDATE', {
+        results: results.slice(-50), // ultimos 50 resultados
+        latestResult: latestResult,
+        bettingPhase: bettingPhase,
+        totalRounds: results.length,
+        url: window.location.href
+      });
+    }
 
-      for (const mutation of mutations) {
-        const target = mutation.target;
-        const targetClass = (target.className || '').toLowerCase();
-        const targetId = (target.id || '').toLowerCase();
+    // Sempre informa fase de aposta
+    if (bettingPhase) {
+      sendToParent('BETTING_PHASE_ACTIVE', {
+        timestamp: Date.now()
+      });
+    }
+  }
 
-        if (
-          targetClass.includes('history') || targetClass.includes('result') ||
-          targetClass.includes('road') || targetClass.includes('round') ||
-          targetId.includes('history') || targetId.includes('game')
-        ) {
-          hasGameChange = true;
-          break;
-        }
-      }
+  /**
+   * Inicia monitoramento via MutationObserver + polling
+   */
+  function startMonitoring() {
+    // Polling como fallback
+    pollTimer = setInterval(monitorGame, POLL_INTERVAL);
 
-      if (hasGameChange) {
-        const state = extractGameState();
-        if (state) {
-          const resultCount = Array.isArray(state.results) ? state.results.length : 0;
-          if (resultCount !== lastResultCount) {
-            lastResultCount = resultCount;
-            postToExtension('GAME_STATE_UPDATE', { state });
-          }
-        }
-      }
+    // Observer para mudancas no DOM
+    observer = new MutationObserver(() => {
+      monitorGame();
     });
 
-    gameObserver.observe(document.body, {
+    observer.observe(document.body, {
       childList: true,
       subtree: true,
       characterData: true,
       attributes: true,
-      attributeFilter: ['class', 'data-result', 'data-outcome']
+      attributeFilter: ['class', 'style', 'data-result', 'fill']
     });
 
-    console.log('[Injected] Game observer started');
-  }
-
-  /**
-   * Inicializa o script injetado
-   */
-  function init() {
-    if (isInitialized) return;
-    isInitialized = true;
-
-    console.log(`[Injected] Autodrive HITL Core v${VERSION} - Injected script ready`);
-
-    // Anunciar presença
-    postToExtension('INJECTED_READY', { version: VERSION, url: window.location.href });
-
-    // Coletar estado inicial
-    const initialState = extractGameState();
-    if (initialState) {
-      postToExtension('INITIAL_STATE', { state: initialState });
-    }
-
-    // Iniciar observer
-    startGameObserver();
-
-    // Ouvir comandos do content.js
-    window.addEventListener('message', (event) => {
-      if (!event.data || event.data.source !== 'AUTODRIVE_CONTENT') return;
-
-      const { type, payload } = event.data;
-
-      switch (type) {
-        case 'GET_STATE':
-          postToExtension('GAME_STATE_UPDATE', { state: extractGameState() });
-          break;
-        case 'STOP_OBSERVER':
-          if (gameObserver) {
-            gameObserver.disconnect();
-            gameObserver = null;
-          }
-          break;
-        case 'START_OBSERVER':
-          startGameObserver();
-          break;
-      }
+    console.log('[Autodrive-IframeAgent] Monitoramento iniciado em:', window.location.href);
+    sendToParent('AGENT_READY', {
+      url: window.location.href,
+      version: VERSION
     });
   }
 
   // Iniciar quando DOM estiver pronto
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
+    document.addEventListener('DOMContentLoaded', startMonitoring);
   } else {
-    init();
+    startMonitoring();
   }
+
+  // Ouvir comandos do frame pai
+  window.addEventListener('message', (event) => {
+    if (!event.data || event.data.target !== MSG_SOURCE) return;
+    if (event.data.command === 'GET_RESULTS') {
+      monitorGame();
+    }
+  });
 
 })();
