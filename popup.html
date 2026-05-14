@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Autodrive HITL Core</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 320px;
+      min-height: 200px;
+      background: #0a0a14;
+      color: #fff;
+      font-family: 'Segoe UI', Roboto, sans-serif;
+      font-size: 13px;
+    }
+    .header {
+      background: linear-gradient(135deg, #1a237e, #0d47a1);
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .logo { font-size: 24px; }
+    .title { font-weight: 700; font-size: 14px; }
+    .subtitle { font-size: 10px; opacity: 0.7; letter-spacing: 1px; }
+    .status-bar {
+      background: rgba(33, 150, 243, 0.1);
+      border-bottom: 1px solid rgba(33, 150, 243, 0.2);
+      padding: 8px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .status-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #f44336; margin-right: 6px; display: inline-block;
+      animation: pulse 1.5s infinite;
+    }
+    .status-dot.running { background: #4CAF50; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .status-text { font-size: 11px; color: #aaa; }
+    .content { padding: 16px; }
+    .section { margin-bottom: 16px; }
+    .section-title { font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+    .row { display: flex; gap: 8px; }
+    .btn {
+      flex: 1; padding: 10px; border: none; border-radius: 8px;
+      cursor: pointer; font-size: 12px; font-weight: 700;
+      transition: all 0.2s;
+    }
+    .btn-start { background: #2e7d32; color: #fff; }
+    .btn-start:hover { background: #388e3c; }
+    .btn-stop { background: #b71c1c; color: #fff; }
+    .btn-stop:hover { background: #c62828; }
+    .btn-pause { background: #e65100; color: #fff; flex: 0.5; }
+    .stat-grid {
+      display: grid; grid-template-columns: 1fr 1fr 1fr;
+      gap: 8px; text-align: center;
+    }
+    .stat-box {
+      background: rgba(255,255,255,0.05);
+      border-radius: 8px; padding: 8px 4px;
+    }
+    .stat-value { font-size: 18px; font-weight: 700; color: #4CAF50; }
+    .stat-label { font-size: 9px; color: #888; text-transform: uppercase; }
+    .config-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    .config-label { font-size: 11px; color: #aaa; }
+    .config-value { font-size: 11px; font-weight: 600; color: #90CAF9; }
+    .footer {
+      padding: 8px 16px;
+      text-align: center;
+      font-size: 9px;
+      color: #555;
+      border-top: 1px solid rgba(255,255,255,0.05);
+    }
+    .version { color: #1565C0; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo">🤖</div>
+    <div>
+      <div class="title">Autodrive HITL Core</div>
+      <div class="subtitle">DECISION ENGINE v2.4</div>
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <div style="display: flex; align-items: center;">
+      <span class="status-dot" id="statusDot"></span>
+      <span class="status-text" id="statusText">Inativo</span>
+    </div>
+    <span id="engineState" style="font-size: 10px; color: #90CAF9;">IDLE</span>
+  </div>
+
+  <div class="content">
+    <!-- Controles principais -->
+    <div class="section">
+      <div class="section-title">Controle</div>
+      <div class="row">
+        <button class="btn btn-start" id="btnStart">▶ INICIAR</button>
+        <button class="btn btn-stop" id="btnStop">■ PARAR</button>
+        <button class="btn btn-pause" id="btnPause">⏸</button>
+      </div>
+    </div>
+
+    <!-- Estatisticas -->
+    <div class="section">
+      <div class="section-title">Sessao</div>
+      <div class="stat-grid">
+        <div class="stat-box">
+          <div class="stat-value" id="statProfit">R$ 0</div>
+          <div class="stat-label">Lucro</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-value" id="statWins" style="color: #4CAF50;">0</div>
+          <div class="stat-label">Wins</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-value" id="statLosses" style="color: #f44336;">0</div>
+          <div class="stat-label">Losses</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Config atual -->
+    <div class="section">
+      <div class="section-title">Configuracao</div>
+      <div class="config-row">
+        <span class="config-label">Autodrive acima de</span>
+        <span class="config-value" id="cfgAutodrive">85%</span>
+      </div>
+      <div class="config-row">
+        <span class="config-label">HITL acima de</span>
+        <span class="config-value" id="cfgHitl">65%</span>
+      </div>
+      <div class="config-row">
+        <span class="config-label">Countdown</span>
+        <span class="config-value" id="cfgCountdown">8s</span>
+      </div>
+      <div class="config-row">
+        <span class="config-label">Stake base</span>
+        <span class="config-value" id="cfgStake">R$ 5,00</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <span class="version">Autodrive HITL Core</span> • Engenharia de Software
+  </div>
+
+  <script>
+    // Comunicar com background/content
+    async function getState() {
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_STATE' });
+        if (response && response.state) updateUI(response.state);
+      } catch (e) {
+        document.getElementById('statusText').textContent = 'Pagina incompativel';
+      }
+    }
+
+    function updateUI(state) {
+      const { running, bankroll, config } = state;
+      const dot = document.getElementById('statusDot');
+      const text = document.getElementById('statusText');
+      
+      if (running) {
+        dot.classList.add('running');
+        text.textContent = 'Engine ativo';
+      } else {
+        dot.classList.remove('running');
+        text.textContent = 'Inativo';
+      }
+
+      if (bankroll) {
+        document.getElementById('statProfit').textContent = 'R$ ' + (bankroll.sessionProfit || 0).toFixed(2);
+        document.getElementById('statProfit').style.color = bankroll.sessionProfit >= 0 ? '#4CAF50' : '#f44336';
+        document.getElementById('statWins').textContent = bankroll.wins || 0;
+        document.getElementById('statLosses').textContent = bankroll.losses || 0;
+      }
+
+      if (config) {
+        document.getElementById('cfgAutodrive').textContent = config.autodriveThreshold + '%';
+        document.getElementById('cfgHitl').textContent = config.hitlThreshold + '%';
+        document.getElementById('cfgCountdown').textContent = config.countdownSeconds + 's';
+        document.getElementById('cfgStake').textContent = 'R$ ' + (config.stakeBase || 5).toFixed(2);
+      }
+    }
+
+    async function sendToContent(type, data) {
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        await chrome.tabs.sendMessage(tab.id, { type, data });
+        getState();
+      } catch (e) {
+        console.error('Erro ao comunicar:', e);
+      }
+    }
+
+    document.getElementById('btnStart').addEventListener('click', () => sendToContent('START_ENGINE'));
+    document.getElementById('btnStop').addEventListener('click', () => sendToContent('STOP_ENGINE'));
+    document.getElementById('btnPause').addEventListener('click', () => sendToContent('PAUSE_ENGINE'));
+
+    // Inicializar
+    getState();
+  </script>
+</body>
+</html>
