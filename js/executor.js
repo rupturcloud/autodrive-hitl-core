@@ -1,216 +1,172 @@
 /**
- * Autodrive HITL Core - Executor v2.4
- * Responsável pela execução final do clique com retry, guardrails e audit trail
- * Integra com InfraGuardrails para Rate Limiting e Circuit Breaker
+ * Autodrive HITL Core - Executor v2.5
+ * Executa apostas no BetBoom/Evolution clicando nos botoes corretos
+ * Tem retry automatico e fallback multi-estrategia
  */
 
 const Executor = (() => {
 
   const executionLog = [];
-  const MAX_LOG = 200;
 
-  // Configurações de retry
-  const RETRY_CONFIG = {
-    maxRetries: 3,
-    retryDelayMs: 500,
-    backoffMultiplier: 1.5
-  };
-
-  /**
-   * Aguarda um delay em ms
-   * @param {number} ms
-   * @returns {Promise}
-   */
   function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  /**
-   * Tenta executar o clique com retry automático
-   * @param {Element} element - Elemento a ser clicado
-   * @param {Object} context - Contexto da execução
-   * @returns {Promise<Object>} Resultado da execução
-   */
-  async function executeWithRetry(element, context = {}) {
-    let lastError = null;
-
-    for (let attempt = 1; attempt <= RETRY_CONFIG.maxRetries; attempt++) {
-      try {
-        // Verificar se elemento ainda está disponível
-        if (!element || !document.contains(element)) {
-          throw new Error('Elemento não está mais no DOM');
-        }
-
-        // Verificar se elemento está visível e interagível
-        const rect = element.getBoundingClientRect();
-        if (rect.width === 0 || rect.height === 0) {
-          throw new Error('Elemento não está visível (tamanho zero)');
-        }
-
-        const style = window.getComputedStyle(element);
-        if (style.display === 'none' || style.visibility === 'hidden') {
-          throw new Error('Elemento está oculto');
-        }
-
-        if (element.disabled) {
-          throw new Error('Elemento está desabilitado');
-        }
-
-        // Scroll para o elemento se necessário
-        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        await delay(100);
-
-        // Executar clique
-        element.click();
-
-        const result = {
-          success: true,
-          attempt,
-          timestamp: Date.now(),
-          elementTag: element.tagName,
-          elementText: (element.textContent || '').trim().substring(0, 50),
-          context
-        };
-
-        logExecution(result);
-        return result;
-
-      } catch (error) {
-        lastError = error;
-        console.warn(`[Executor] Attempt ${attempt} failed: ${error.message}`);
-
-        if (attempt < RETRY_CONFIG.maxRetries) {
-          const retryDelay = RETRY_CONFIG.retryDelayMs * Math.pow(RETRY_CONFIG.backoffMultiplier, attempt - 1);
-          await delay(retryDelay);
-        }
-      }
-    }
-
-    const failResult = {
-      success: false,
-      attempt: RETRY_CONFIG.maxRetries,
-      timestamp: Date.now(),
-      error: lastError ? lastError.message : 'Unknown error',
-      context
-    };
-
-    logExecution(failResult);
-    return failResult;
+  function logExecution(entry) {
+    executionLog.push(entry);
+    if (executionLog.length > 100) executionLog.shift();
+    console.log('[Executor]', JSON.stringify(entry));
   }
 
-  /**
-   * Executa aposta com todas as proteções
-   * @param {Object} params
-   * @param {string} params.outcome - 'P', 'B', 'T'
-   * @param {number} params.stake - Valor da aposta
-   * @param {Object} params.convictionResult - Resultado do ConvictionEngine
-   * @param {Object} params.consensusResult - Resultado do ConsensusEngine
-   * @returns {Promise<Object>} Resultado completo da execução
-   */
-  async function executeBet({ outcome, stake, convictionResult, consensusResult, patternName } = {}) {
-    const executionId = `exec_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+  // =========================================================
+  // ENCONTRA O BOTAO DE APOSTA NO DOM
+  // =========================================================
+  function findBetButton(cor) {
+    // Mapeamento de cor para texto/atributos dos botoes
+    const mappings = {
+      blue: {
+        texts: ['JOGADOR', 'PLAYER', 'Jogador', 'Player', 'P'],
+        attrs: ['player', 'jogador', 'p'],
+        classes: ['player', 'bet-player', 'jogador']
+      },
+      red: {
+        texts: ['BANCA', 'BANKER', 'Banca', 'Banker', 'B'],
+        attrs: ['banker', 'banca', 'b'],
+        classes: ['banker', 'bet-banker', 'banca']
+      },
+      green: {
+        texts: ['EMPATE', 'TIE', 'Empate', 'Tie', 'T'],
+        attrs: ['tie', 'empate', 't'],
+        classes: ['tie', 'bet-tie', 'empate']
+      }
+    };
 
-    console.log(`[Executor] Starting execution ${executionId} - outcome: ${outcome}, stake: ${stake}`);
+    const map = mappings[cor] || mappings.blue;
 
-    // 1. Verificar guardrails
-    if (typeof InfraGuardrails !== 'undefined') {
-      const guardCheck = InfraGuardrails.checkAll({ outcome, stake });
-      if (!guardCheck.allowed) {
-        return {
-          success: false,
-          executionId,
-          reason: guardCheck.reason,
-          blocked: true,
-          timestamp: Date.now()
-        };
+    // Estrategia 1: data attributes
+    for (const attr of map.attrs) {
+      const el = document.querySelector('[data-bet="' + attr + '"], [data-side="' + attr + '"], [data-outcome="' + attr + '"]');
+      if (el && !el.disabled) return el;
+    }
+
+    // Estrategia 2: aria-label
+    for (const text of map.texts) {
+      const el = document.querySelector('button[aria-label*="' + text + '"]');
+      if (el && !el.disabled) return el;
+    }
+
+    // Estrategia 3: texto do botao
+    const allBtns = Array.from(document.querySelectorAll('button, [role="button"]'));
+    for (const btn of allBtns) {
+      const txt = (btn.textContent || '').trim().toUpperCase();
+      if (map.texts.some(t => txt === t.toUpperCase() || txt.includes(t.toUpperCase()))) {
+        if (!btn.disabled) return btn;
       }
     }
 
-    // 2. Detectar e validar elemento de clique
-    let clickValidation = { canClick: false, element: null, reason: 'InteractionIntelligence not available' };
-
-    if (typeof InteractionIntelligence !== 'undefined') {
-      clickValidation = InteractionIntelligence.detectAndValidateClick(outcome);
+    // Estrategia 4: classes CSS
+    for (const cls of map.classes) {
+      const el = document.querySelector('.' + cls + ', [class*="' + cls + '"]');
+      if (el && !el.disabled) {
+        const tag = el.tagName.toLowerCase();
+        if (tag === 'button' || el.getAttribute('role') === 'button') return el;
+        // Procura botao dentro do elemento
+        const btn = el.querySelector('button');
+        if (btn && !btn.disabled) return btn;
+        return el;
+      }
     }
 
-    if (!clickValidation.canClick || !clickValidation.element) {
-      return {
+    return null;
+  }
+
+  // =========================================================
+  // EXECUTA APOSTA COM RETRY
+  // =========================================================
+  async function executarAposta({ cor, stake, pattern, auto = true }) {
+    const startTime = Date.now();
+    console.log('[Executor] executarAposta: cor=' + cor + ' stake=' + stake + ' auto=' + auto);
+
+    let btn = null;
+    let attempts = 0;
+
+    // Tenta ate 3x encontrar e clicar o botao
+    while (attempts < 3 && !btn) {
+      btn = findBetButton(cor);
+      if (!btn) {
+        console.warn('[Executor] Botao nao encontrado para ' + cor + ', tentativa ' + (attempts + 1));
+        await delay(500);
+        attempts++;
+      }
+    }
+
+    if (!btn) {
+      const result = {
         success: false,
-        executionId,
-        reason: clickValidation.reason || 'Elemento de clique não encontrado',
-        blocked: false,
-        timestamp: Date.now()
+        cor,
+        error: 'Botao de aposta nao encontrado para: ' + cor,
+        attempts,
+        timestamp: startTime
       };
+      logExecution(result);
+      return result;
     }
 
-    // 3. Executar clique com retry
-    const clickResult = await executeWithRetry(clickValidation.element, {
-      executionId,
-      outcome,
-      stake,
-      pattern: patternName,
-      conviction: convictionResult ? convictionResult.conviction : null,
-      consensus: consensusResult ? consensusResult.score : null
-    });
+    // Clicar no botao
+    try {
+      btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      await delay(150);
+      btn.click();
+      await delay(100);
+      // Dispara também eventos de mouse para compatibilidade
+      btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+      btn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
 
-    // 4. Registrar no InfraGuardrails se sucesso
-    if (clickResult.success && typeof InfraGuardrails !== 'undefined') {
-      InfraGuardrails.recordExecution({ outcome, stake, executionId });
+      const result = {
+        success: true,
+        cor,
+        stake,
+        pattern: pattern ? pattern.id : 'unknown',
+        auto,
+        duration: Date.now() - startTime,
+        timestamp: startTime
+      };
+      logExecution(result);
+      console.log('[Executor] APOSTA EXECUTADA: ' + cor.toUpperCase() + ' R$' + stake);
+      return result;
+
+    } catch(e) {
+      const result = {
+        success: false,
+        cor,
+        error: e.message,
+        timestamp: startTime
+      };
+      logExecution(result);
+      return result;
     }
-
-    return {
-      ...clickResult,
-      executionId,
-      outcome,
-      stake,
-      pattern: patternName
-    };
   }
 
-  /**
-   * Registra execução no log
-   * @param {Object} result
-   */
-  function logExecution(result) {
-    executionLog.push(result);
-    if (executionLog.length > MAX_LOG) executionLog.shift();
+  // Wrapper compativel com interface antiga (outcome = P/B/T)
+  async function executeBet({ outcome, stake, cor, pattern, auto } = {}) {
+    const corMap = { 'P': 'blue', 'B': 'red', 'T': 'green', 'player': 'blue', 'banker': 'red', 'tie': 'green' };
+    const finalCor = cor || corMap[outcome] || 'blue';
+    return executarAposta({ cor: finalCor, stake, pattern, auto });
   }
 
-  /**
-   * Retorna log de execuções
-   */
-  function getLog() {
-    return [...executionLog];
-  }
-
-  /**
-   * Retorna estatísticas de execução
-   */
-  function getStats() {
-    const total = executionLog.length;
-    const successful = executionLog.filter(e => e.success).length;
-    const failed = total - successful;
-    return {
-      total,
-      successful,
-      failed,
-      successRate: total > 0 ? Math.round((successful / total) * 100) / 100 : 0
-    };
-  }
-
-  /**
-   * Reseta log de execuções
-   */
-  function reset() {
-    executionLog.length = 0;
+  function getLog(limit = 20) {
+    return executionLog.slice(-limit);
   }
 
   return {
+    executarAposta,
     executeBet,
-    executeWithRetry,
-    getLog,
-    getStats,
-    reset
+    findBetButton,
+    getLog
   };
 
 })();
+
+window.Executor = Executor;
+console.log('[Executor] Executor v2.5 carregado - pronto para apostar');
