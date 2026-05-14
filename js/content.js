@@ -1,147 +1,247 @@
 /**
- * Autodrive HITL Core - Content Script v2.4
- * Roda em betboom.bet.br - Ponto de entrada principal
- * Recebe dados do iframe do jogo via window.postMessage
- * e coordena todos os motores
+ * Autodrive HITL Core - content.js v2.5
+ * Ponto de entrada principal no betboom.bet.br
+ * Recebe historico do iframe via postMessage e APOSTA conforme padroes indicados
  */
 
-console.log('[Content] Autodrive HITL Core v2.4 inicializando...');
+console.log('[Content] Autodrive HITL Core v2.5 iniciando...');
 
 (async () => {
   'use strict';
 
-  const VERSION = '2.4.2';
-  const IFRAME_SOURCE = 'AUTODRIVE_IFRAME_AGENT';
+  const VERSION = '2.5';
+  const IFRAME_SOURCE = 'AUTODRIVE_IFRAME';
 
-  // Estado interno
-  const state = {
-    running: false,
-    history: [],         // Historico normalizado ['A','V','E']
-    galeLevel: 0,
-    sessionProfit: 0,
-    roundsPlayed: 0,
-    bettingPhaseActive: false
-  };
+  let engineRunning = false;
+  let currentHistory = [];
+  let lastProcessedHash = '';
+  let betInProgress = false;
 
-  /**
-   * Inicializa todos os modulos
-   */
-  function initModules() {
-    // Inicializa Overlay
-    if (typeof Overlay !== 'undefined') {
-      Overlay.init();
-      console.log('[Content] Overlay inicializado');
-    }
-
-    // Inicializa DecisionEngine
-    if (typeof DecisionEngine !== 'undefined') {
-      DecisionEngine.stop();
-      console.log('[Content] DecisionEngine pronto');
-    }
-
-    console.log('[Content] Modulos inicializados com sucesso - v' + VERSION);
+  // ============================================================
+  // INICIALIZACAO DOS MODULOS
+  // ============================================================
+  function waitForModules(maxWait = 8000) {
+    return new Promise((resolve) => {
+      const check = () => {
+        if (typeof PatternEngine !== 'undefined' &&
+            typeof Overlay !== 'undefined') {
+          resolve(true);
+        } else if (maxWait <= 0) {
+          resolve(false);
+        } else {
+          maxWait -= 200;
+          setTimeout(check, 200);
+        }
+      };
+      check();
+    });
   }
 
-  /**
-   * Listener de mensagens do iframe (IframeAgent)
-   */
-  function setupMessageListener() {
+  // ============================================================
+  // LISTENER DE MENSAGENS DO IFRAME
+  // ============================================================
+  function setupIframeBridge() {
     window.addEventListener('message', function(event) {
-      const data = event.data;
+      const msg = event.data;
+      if (!msg || msg.source !== IFRAME_SOURCE) return;
+      if (msg.type !== 'NEW_HISTORY') return;
 
-      // Seguranca: so aceita mensagens do nosso agente
-      if (!data || data.source !== IFRAME_SOURCE) return;
+      const history = msg.history || [];
+      if (!history.length) return;
 
-      console.log('[Content] Mensagem recebida do iframe: ' + data.type);
+      const hash = history.join('');
+      if (hash === lastProcessedHash) return;
+      lastProcessedHash = hash;
 
-      switch (data.type) {
-        case 'ROUND_HISTORY':
-          processNewRound(data.payload);
-          break;
+      currentHistory = history;
 
-        case 'GAME_STATE':
-          // Futuro: pode usar para detectar fase de aposta
-          console.log('[Content] Game state recebido:', data.payload);
-          break;
+      console.log('[Content] Nova historia recebida: ' + history.slice(-6).join(' ') + ' (total=' + history.length + ')');
 
-        default:
-          console.warn('[Content] Tipo de mensagem desconhecido:', data.type);
+      // Atualiza overlay
+      if (typeof Overlay !== 'undefined') {
+        Overlay.updateTabuleiro(history);
+      }
+
+      // Atualiza HistoryStore
+      if (typeof HistoryStore !== 'undefined') {
+        HistoryStore.addMany(history);
+      }
+
+      // Roda ciclo de decisao
+      if (engineRunning && !betInProgress) {
+        runDecisionCycle(history);
       }
     });
 
-    console.log('[Content] MessageListener ativo - aguardando dados do iframe');
+    console.log('[Content] Bridge iframe ativa - aguardando dados...');
   }
 
-  // ===================== PROCESSA NOVA RODADA =====================
-  function processNewRound(payload) {
-    const { history, latest, total } = payload;
+  // ============================================================
+  // CICLO DE DECISAO: Detecta padrao e APOSTA
+  // ============================================================
+  async function runDecisionCycle(history) {
+    if (!history || history.length < 5) return;
 
-    if (!history || history.length === 0) return;
+    // 1. Detectar padroes
+    const patterns = (typeof PatternEngine !== 'undefined')
+      ? PatternEngine.detectPatterns(history)
+      : [];
 
-    console.log('[Content] Nova rodada detectada! Total: ' + total + ' | Ultima: ' + latest);
-
-    // Atualiza historico global
-    if (typeof HistoryStore !== 'undefined') {
-      HistoryStore.addMany(history);
+    if (!patterns || patterns.length === 0) {
+      overlayLog('Nenhum padrao detectado (' + history.length + ' rodadas)', 'info');
+      return;
     }
 
-    // Atualiza estado interno
-    state.history = history;
-    state.roundsPlayed = total;
+    const best = patterns[0];
+    overlayLog('Padrao: ' + best.name + ' -> ' + best.action, 'success');
 
-    // Atualiza tabuleiro no Overlay
-    if (typeof Overlay !== 'undefined') {
-      Overlay.updateTabuleiro(history);
-    }
-
-    // Roda ciclo de decisao se estiver ativo
-    if (state.running && typeof DecisionEngine !== 'undefined') {
-      DecisionEngine.executarFluxoCompleto(history).then(decision => {
-        if (decision && decision.shouldBet) {
-          console.log('[Content] Decisao: ' + decision.cor + ' | Conviction: ' + decision.convictionScore + '%');
-        }
-      }).catch(err => {
-        console.error('[Content] Erro no ciclo de decisao:', err);
+    // 2. Calcular conviction
+    let convictionScore = 75;
+    if (typeof ConvictionEngine !== 'undefined') {
+      const conv = ConvictionEngine.calculateConviction({
+        patternConfidence: best.confidence || 80,
+        consensusAgreement: patterns.length > 1 ? 78 : 65,
+        contextStability: 75,
+        bankrollSafety: 90
       });
+      convictionScore = conv.convictionScore;
+    }
+
+    // 3. Verificar conviccao minima
+    const minConviction = (typeof AutodriveConfig !== 'undefined' && AutodriveConfig.minConviction) || 70;
+    if (convictionScore < minConviction) {
+      overlayLog('Convicção baixa: ' + convictionScore + '% (min=' + minConviction + '%)', 'warn');
+      return;
+    }
+
+    // 4. Determinar cor da aposta
+    const corMap = { 'A': 'blue', 'V': 'red', 'E': 'green', 'blue': 'blue', 'red': 'red', 'green': 'green' };
+    const cor = corMap[best.action] || best.action;
+
+    // 5. Mostrar no overlay para HITL ou executar auto
+    const autoThreshold = (typeof AutodriveConfig !== 'undefined' && AutodriveConfig.autoExecuteThreshold) || 82;
+
+    if (convictionScore >= autoThreshold) {
+      // AUTODRIVE: executa automaticamente
+      overlayLog('[AUTO] Apostando ' + cor.toUpperCase() + ' | ' + convictionScore + '%', 'success');
+      await executeBet(cor, best);
+    } else {
+      // HITL: mostra sugestao com countdown
+      overlayLog('[HITL] Sugestao: ' + cor.toUpperCase() + ' | ' + convictionScore + '%', 'warn');
+      if (typeof Overlay !== 'undefined') {
+        Overlay.showSuggestion({
+          cor, pattern: best, convictionScore,
+          explanation: best.name + ' (' + convictionScore + '%)'
+        });
+      }
     }
   }
 
-  /**
-   * Controles: start / stop / pause
-   */
+  // ============================================================
+  // EXECUCAO DA APOSTA
+  // ============================================================
+  async function executeBet(cor, pattern) {
+    if (betInProgress) return;
+    betInProgress = true;
+
+    try {
+      if (typeof Executor !== 'undefined') {
+        const stake = getStake();
+        await Executor.executarAposta({ cor, stake, pattern, auto: true });
+        overlayLog('Aposta executada: ' + cor.toUpperCase() + ' R$' + stake, 'success');
+      } else {
+        // Fallback: clica diretamente no botao de aposta
+        const clicked = clickBetButton(cor);
+        if (clicked) {
+          overlayLog('Bet clicado direto: ' + cor.toUpperCase(), 'success');
+        } else {
+          overlayLog('ERRO: botao de aposta nao encontrado!', 'error');
+        }
+      }
+    } catch(e) {
+      overlayLog('Erro ao apostar: ' + e.message, 'error');
+      console.error('[Content] Erro executor:', e);
+    } finally {
+      // Cooldown de 15s antes de aceitar nova aposta
+      setTimeout(() => { betInProgress = false; }, 15000);
+    }
+  }
+
+  // Fallback direto: clicar no botao de aposta da UI do BetBoom/Evolution
+  function clickBetButton(cor) {
+    // Botoes de JOGADOR (Player/Azul) e BANCA (Banker/Vermelho)
+    const selectors = {
+      blue:  ['[data-bet="player"]', '[data-side="player"]', '.bet-player', '.player-bet-btn', 'button[aria-label*="Player"]', 'button[aria-label*="Jogador"]'],
+      red:   ['[data-bet="banker"]', '[data-side="banker"]', '.bet-banker', '.banker-bet-btn', 'button[aria-label*="Banker"]', 'button[aria-label*="Banca"]'],
+      green: ['[data-bet="tie"]',    '[data-side="tie"]',    '.bet-tie',    '.tie-bet-btn',    'button[aria-label*="Tie"]',    'button[aria-label*="Empate"]']
+    };
+    const sels = selectors[cor] || [];
+    for (const sel of sels) {
+      try {
+        const btn = document.querySelector(sel);
+        if (btn && !btn.disabled) {
+          btn.click();
+          return true;
+        }
+      } catch(e) {}
+    }
+    return false;
+  }
+
+  function getStake() {
+    if (typeof AutodriveConfig !== 'undefined' && AutodriveConfig.stake) return AutodriveConfig.stake;
+    return 5; // stake padrao R$5
+  }
+
+  // ============================================================
+  // CONTROLES DO ENGINE
+  // ============================================================
   function startEngine() {
-    state.running = true;
+    engineRunning = true;
     if (typeof DecisionEngine !== 'undefined') DecisionEngine.start();
-    if (typeof Overlay !== 'undefined') Overlay.log('[Engine] Iniciado pelo operador', 'success');
-    console.log('[Content] Engine INICIADO');
+    overlayLog('Engine INICIADO - monitorando padroes', 'success');
+    console.log('[Content] Engine iniciado');
   }
 
   function stopEngine() {
-    state.running = false;
+    engineRunning = false;
+    betInProgress = false;
     if (typeof DecisionEngine !== 'undefined') DecisionEngine.stop();
-    if (typeof Overlay !== 'undefined') Overlay.log('[Engine] Parado pelo operador', 'warn');
-    console.log('[Content] Engine PARADO');
+    overlayLog('Engine PARADO', 'warn');
+    console.log('[Content] Engine parado');
   }
 
-  /**
-   * Inicializacao principal
-   */
-  function init() {
-    initModules();
-    setupMessageListener();
+  function overlayLog(msg, type) {
+    if (typeof Overlay !== 'undefined') Overlay.log(msg, type);
+    console.log('[Content] ' + msg);
+  }
 
-    // Expor controles globalmente
+  // ============================================================
+  // INICIALIZACAO PRINCIPAL
+  // ============================================================
+  async function init() {
+    const ready = await waitForModules();
+    if (!ready) {
+      console.warn('[Content] Modulos nao carregaram totalmente, iniciando mesmo assim...');
+    }
+
+    if (typeof Overlay !== 'undefined') Overlay.init();
+
+    setupIframeBridge();
+
+    // Expor API global
     window.AutodriveContent = {
       start: startEngine,
       stop: stopEngine,
-      getState: () => state,
+      getHistory: () => currentHistory,
+      isRunning: () => engineRunning,
       VERSION
     };
 
-    console.log('[Content] Autodrive HITL Core v' + VERSION + ' pronto - aguardando dados do iframe');
+    console.log('[Content] Autodrive HITL Core v' + VERSION + ' pronto!');
+    overlayLog('Sistema pronto - aguardando dados do iframe', 'info');
   }
 
-  // Auto-inicializar
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
   } else {
@@ -149,5 +249,3 @@ console.log('[Content] Autodrive HITL Core v2.4 inicializando...');
   }
 
 })();
-
-console.log('[Content] Content Script carregado com sucesso - Bridge com iframe ativo');
