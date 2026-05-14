@@ -10,13 +10,13 @@ console.log('[Content] Autodrive HITL Core v2.4 inicializando...');
 (async () => {
   'use strict';
 
-  const VERSION = '2.4.0';
-  const IFRAME_MSG_SOURCE = 'AUTODRIVE_IFRAME_AGENT';
+  const VERSION = '2.4.2';
+  const IFRAME_SOURCE = 'AUTODRIVE_IFRAME_AGENT';
 
   // Estado interno
   const state = {
     running: false,
-    history: [],         // Historico normalizado ['P','B','T']
+    history: [],         // Historico normalizado ['A','V','E']
     galeLevel: 0,
     sessionProfit: 0,
     roundsPlayed: 0,
@@ -27,196 +27,127 @@ console.log('[Content] Autodrive HITL Core v2.4 inicializando...');
    * Inicializa todos os modulos
    */
   function initModules() {
-    // Iniciar DecisionEngine
-    if (typeof DecisionEngine !== 'undefined') {
-      DecisionEngine.start();
-    }
-
-    // Iniciar Overlay
+    // Inicializa Overlay
     if (typeof Overlay !== 'undefined') {
       Overlay.init();
-      Overlay.log('Sistema v2.4 inicializado', 'info');
+      console.log('[Content] Overlay inicializado');
     }
 
-    console.log('[Content] Sistema inicializado. Aguardando dados do jogo via iframe...');
+    // Inicializa DecisionEngine
+    if (typeof DecisionEngine !== 'undefined') {
+      DecisionEngine.stop();
+      console.log('[Content] DecisionEngine pronto');
+    }
+
+    console.log('[Content] Modulos inicializados com sucesso - v' + VERSION);
   }
 
   /**
-   * Normaliza resultado do iframe para formato interno
+   * Listener de mensagens do iframe (IframeAgent)
    */
-  function normalizeResult(raw) {
-    if (!raw) return null;
-    const r = String(raw).toUpperCase().trim();
-    if (r === 'P' || r === 'PLAYER' || r === 'JOGADOR' || r === 'A' || r === 'AZUL') return 'P';
-    if (r === 'B' || r === 'BANKER' || r === 'BANCA' || r === 'V' || r === 'VERMELHO') return 'B';
-    if (r === 'T' || r === 'TIE' || r === 'EMPATE' || r === 'E') return 'T';
-    return null;
-  }
+  function setupMessageListener() {
+    window.addEventListener('message', function(event) {
+      const data = event.data;
 
-  /**
-   * Processa atualizacao de dados do jogo
-   */
-  async function onGameDataUpdate(payload) {
-    const { results, latestResult, bettingPhase, totalRounds } = payload;
+      // Seguranca: so aceita mensagens do nosso agente
+      if (!data || data.source !== IFRAME_SOURCE) return;
 
-    // Atualiza fase de apostas
-    if (bettingPhase !== undefined) {
-      state.bettingPhaseActive = bettingPhase;
-    }
+      console.log('[Content] Mensagem recebida do iframe: ' + data.type);
 
-    // Atualiza historico se recebeu novos resultados
-    if (Array.isArray(results) && results.length > 0) {
-      const normalized = results.map(normalizeResult).filter(Boolean);
-      if (normalized.length !== state.history.length) {
-        state.history = normalized;
-        console.log('[Content] Historico atualizado:', state.history.length, 'rodadas');
+      switch (data.type) {
+        case 'ROUND_HISTORY':
+          processNewRound(data.payload);
+          break;
 
-        // Atualizar overlay tabuleiro
-        if (typeof Overlay !== 'undefined') {
-          Overlay.updateTabuleiro(state.history);
-        }
+        case 'GAME_STATE':
+          // Futuro: pode usar para detectar fase de aposta
+          console.log('[Content] Game state recebido:', data.payload);
+          break;
 
-        // Atualizar HistoryStore
-        if (typeof HistoryStore !== 'undefined') {
-          HistoryStore.setHistory(state.history);
-        }
-      }
-    }
-
-    // Se temos novo resultado e o motor esta rodando, tomar decisao
-    if (state.running && state.history.length >= 5) {
-      await runDecisionCycle();
-    }
-  }
-
-  /**
-   * Ciclo de decisao principal
-   */
-  async function runDecisionCycle() {
-    try {
-      if (typeof DecisionEngine === 'undefined') return;
-
-      const decision = await DecisionEngine.executarFluxoCompleto(state.history);
-
-      if (decision && decision.shouldBet) {
-        console.log('[Content] Decisao:', decision.cor, '| Conviction:', decision.convictionScore);
-
-        if (typeof Overlay !== 'undefined') {
-          Overlay.log(
-            decision.autoExecute
-              ? 'Autodrive: ' + decision.cor.toUpperCase()
-              : 'Sugestao HITL: ' + decision.cor.toUpperCase() + ' (' + decision.convictionScore + '%)',
-            'success'
-          );
-        }
-      }
-    } catch (e) {
-      console.error('[Content] Erro no ciclo de decisao:', e);
-    }
-  }
-
-  /**
-   * Listener para mensagens do iframe do jogo
-   */
-  window.addEventListener('message', (event) => {
-    const data = event.data;
-    if (!data || data.source !== IFRAME_MSG_SOURCE) return;
-
-    switch (data.type) {
-      case 'AGENT_READY':
-        console.log('[Content] IframeAgent conectado em:', data.payload.url);
-        if (typeof Overlay !== 'undefined') {
-          Overlay.log('Agente do jogo conectado!', 'success');
-        }
-        break;
-
-      case 'GAME_DATA_UPDATE':
-        onGameDataUpdate(data.payload);
-        break;
-
-      case 'BETTING_PHASE_ACTIVE':
-        state.bettingPhaseActive = true;
-        break;
-
-      default:
-        break;
-    }
-  });
-
-  /**
-   * Listener para mensagens do background/popup
-   */
-  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    switch (msg.type) {
-      case 'START':
-        state.running = true;
-        if (typeof DecisionEngine !== 'undefined') DecisionEngine.start();
-        if (typeof Overlay !== 'undefined') Overlay.log('Engine INICIADO pelo operador', 'success');
-        console.log('[Content] Motor INICIADO');
-        sendResponse({ ok: true });
-        break;
-
-      case 'STOP':
-        state.running = false;
-        if (typeof DecisionEngine !== 'undefined') DecisionEngine.stop();
-        if (typeof Overlay !== 'undefined') Overlay.log('Engine PARADO', 'warn');
-        console.log('[Content] Motor PARADO');
-        sendResponse({ ok: true });
-        break;
-
-      case 'GET_STATE':
-        sendResponse({
-          running: state.running,
-          historyLength: state.history.length,
-          galeLevel: state.galeLevel,
-          sessionProfit: state.sessionProfit,
-          roundsPlayed: state.roundsPlayed
-        });
-        break;
-
-      case 'SET_CONFIG':
-        if (msg.config && typeof DecisionEngine !== 'undefined') {
-          DecisionEngine.setConfig(msg.config);
-        }
-        sendResponse({ ok: true });
-        break;
-    }
-    return true; // async
-  });
-
-  /**
-   * Observador de DOM como fallback (para paginas sem iframe separado)
-   */
-  function setupDOMFallback() {
-    const observer = new MutationObserver(() => {
-      if (!state.running) return;
-
-      // Tenta extrair resultados do DOM do proprio betboom
-      if (typeof InteractionIntelligence !== 'undefined') {
-        const domResults = InteractionIntelligence.extractHistoryFromDOM();
-        if (domResults && domResults.length > state.history.length) {
-          state.history = domResults;
-          if (typeof Overlay !== 'undefined') {
-            Overlay.updateTabuleiro(state.history);
-          }
-        }
+        default:
+          console.warn('[Content] Tipo de mensagem desconhecido:', data.type);
       }
     });
 
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-      characterData: false,
-      attributes: false
-    });
-
-    console.log('[Content] DOM fallback observer ativo');
+    console.log('[Content] MessageListener ativo - aguardando dados do iframe');
   }
 
-  // Inicializar
-  initModules();
-  setupDOMFallback();
+  // ===================== PROCESSA NOVA RODADA =====================
+  function processNewRound(payload) {
+    const { history, latest, total } = payload;
 
-  console.log('[Content] Content script v2.4 pronto. Aguardando dados do iframe...');
+    if (!history || history.length === 0) return;
+
+    console.log('[Content] Nova rodada detectada! Total: ' + total + ' | Ultima: ' + latest);
+
+    // Atualiza historico global
+    if (typeof HistoryStore !== 'undefined') {
+      HistoryStore.addMany(history);
+    }
+
+    // Atualiza estado interno
+    state.history = history;
+    state.roundsPlayed = total;
+
+    // Atualiza tabuleiro no Overlay
+    if (typeof Overlay !== 'undefined') {
+      Overlay.updateTabuleiro(history);
+    }
+
+    // Roda ciclo de decisao se estiver ativo
+    if (state.running && typeof DecisionEngine !== 'undefined') {
+      DecisionEngine.executarFluxoCompleto(history).then(decision => {
+        if (decision && decision.shouldBet) {
+          console.log('[Content] Decisao: ' + decision.cor + ' | Conviction: ' + decision.convictionScore + '%');
+        }
+      }).catch(err => {
+        console.error('[Content] Erro no ciclo de decisao:', err);
+      });
+    }
+  }
+
+  /**
+   * Controles: start / stop / pause
+   */
+  function startEngine() {
+    state.running = true;
+    if (typeof DecisionEngine !== 'undefined') DecisionEngine.start();
+    if (typeof Overlay !== 'undefined') Overlay.log('[Engine] Iniciado pelo operador', 'success');
+    console.log('[Content] Engine INICIADO');
+  }
+
+  function stopEngine() {
+    state.running = false;
+    if (typeof DecisionEngine !== 'undefined') DecisionEngine.stop();
+    if (typeof Overlay !== 'undefined') Overlay.log('[Engine] Parado pelo operador', 'warn');
+    console.log('[Content] Engine PARADO');
+  }
+
+  /**
+   * Inicializacao principal
+   */
+  function init() {
+    initModules();
+    setupMessageListener();
+
+    // Expor controles globalmente
+    window.AutodriveContent = {
+      start: startEngine,
+      stop: stopEngine,
+      getState: () => state,
+      VERSION
+    };
+
+    console.log('[Content] Autodrive HITL Core v' + VERSION + ' pronto - aguardando dados do iframe');
+  }
+
+  // Auto-inicializar
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
 
 })();
+
+console.log('[Content] Content Script carregado com sucesso - Bridge com iframe ativo');
