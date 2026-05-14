@@ -1,208 +1,119 @@
 /**
- * Autodrive HITL Core - injected.js v2.4.4
- * Roda DENTRO do iframe do Evolution (billing-boom / evo-games)
- * Extrai resultados do road map e envia ao top frame via postMessage.
- *
- * Merge das duas linhas (v2.4.0 + v2.4.2):
- *  - Estrategias multiplas de extracao (SVG fill, classes Evolution, fallback texto)
- *  - 3 tipos de mensagens (GAME_DATA_UPDATE, BETTING_PHASE_ACTIVE, AGENT_READY)
- *  - Emite tambem ROUND_HISTORY (compat com content.js do Grok)
- *  - Polling 800ms + MutationObserver
- *  - Listener bidirecional (parent -> iframe)
- *  - Dedupe por hash de historico
+ * Autodrive HITL Core - injected.js v2.5
+ * Roda DENTRO do iframe do Evolution (billing-boom.com / evo-games.com)
+ * Extrai resultados do road map (bead road) e envia ao frame pai via postMessage
  */
 
 (() => {
   'use strict';
 
-  const VERSION = '2.4.4';
-  const MSG_SOURCE = 'AUTODRIVE_IFRAME_AGENT';
-  const POLL_INTERVAL = 800;
+  const SOURCE = 'AUTODRIVE_IFRAME';
+  let lastHash = '';
 
-  let lastResultCount = 0;
-  let lastHistoryHash = '';
-  let observer = null;
-  let pollTimer = null;
-
-  function sendToParent(type, payload) {
-    try {
-      window.top.postMessage({
-        source: MSG_SOURCE,
-        type,
-        payload,
-        timestamp: Date.now(),
-        version: VERSION
-      }, '*');
-    } catch (e) {
-      // cross-origin policy: silencioso
-    }
-  }
-
-  /**
-   * Extracao em camadas - usa o que casar primeiro.
-   * Codigo de cor unificado: 'P' (Player/Azul), 'B' (Banker/Vermelho), 'T' (Tie/Empate).
-   */
-  function extractResults() {
-    const results = [];
-
-    // 1) SVG circles/ellipses com fill colorido (mais confiavel no Evolution)
-    const svgCircles = document.querySelectorAll('svg circle[fill], svg ellipse[fill]');
-    if (svgCircles.length > 0) {
-      svgCircles.forEach((el) => {
-        const fill = (el.getAttribute('fill') || '').toLowerCase();
-        if (fill.includes('blue') || fill === '#0000ff' || fill === '#1e90ff' || fill.includes('3b82f6')) {
-          results.push('P');
-        } else if (fill.includes('red') || fill === '#ff0000' || fill === '#ef4444') {
-          results.push('B');
-        } else if (fill.includes('green') || fill === '#00ff00' || fill === '#22c55e') {
-          results.push('T');
-        }
-      });
-    }
-
-    // 2) Classes CSS do road map (Evolution Bac Bo)
-    if (results.length === 0) {
-      const playerEls = document.querySelectorAll(
-        '[class*="player"][class*="win"], [class*="Player"], [data-outcome="player"], [class*="blue-ball"], [class*="blueBall"]'
-      );
-      const bankerEls = document.querySelectorAll(
-        '[class*="banker"][class*="win"], [class*="Banker"], [data-outcome="banker"], [class*="red-ball"], [class*="redBall"]'
-      );
-      const tieEls = document.querySelectorAll(
-        '[class*="tie"], [class*="Tie"], [data-outcome="tie"], [class*="green-ball"], [class*="greenBall"]'
-      );
-      const maxLen = Math.max(playerEls.length, bankerEls.length, tieEls.length);
-      if (maxLen > 0) {
-        playerEls.forEach(() => results.push('P'));
-        bankerEls.forEach(() => results.push('B'));
-        tieEls.forEach(() => results.push('T'));
-      }
-    }
-
-    // 3) Classes genericas + data-result + .roadmap-item
-    if (results.length === 0) {
-      document.querySelectorAll('[class*="result"], [class*="bead"], [data-result], .roadmap-item').forEach((el) => {
-        const text = ((el.textContent || el.getAttribute('data-result') || '') + ' ' + (el.className || '') + '').toLowerCase();
-        if (text.includes('player') || text.includes('azul')) results.push('P');
-        else if (text.includes('banker') || text.includes('vermelho')) results.push('B');
-        else if (text.includes('tie') || text.includes('empate')) results.push('T');
-      });
-    }
-
-    // 4) Fallback texto bruto (so se nada acima funcionou)
-    if (results.length === 0) {
-      const allText = document.body ? (document.body.innerText || '') : '';
-      const matches = allText.match(/\b(Player|Banker|Tie|PLAYER|BANKER|TIE|Jogador|Banca|Empate)\b/g);
-      if (matches) {
-        matches.forEach((m) => {
-          const lower = m.toLowerCase();
-          if (lower.includes('player') || lower.includes('jogador')) results.push('P');
-          else if (lower.includes('banker') || lower.includes('banca')) results.push('B');
-          else if (lower.includes('tie') || lower.includes('empate')) results.push('T');
-        });
-      }
-    }
-
-    return results;
-  }
-
-  function extractLatestResult() {
-    const bigResult = document.querySelector(
-      '[class*="result"][class*="display"], [class*="roundResult"], [class*="gameResult"], [class*="outcomeLabel"]'
-    );
-    if (bigResult) {
-      const text = bigResult.textContent.trim().toLowerCase();
-      if (text.includes('player') || text.includes('jogador')) return { result: 'P', source: 'bigDisplay' };
-      if (text.includes('banker') || text.includes('banca'))   return { result: 'B', source: 'bigDisplay' };
-      if (text.includes('tie') || text.includes('empate'))     return { result: 'T', source: 'bigDisplay' };
-    }
+  // Normaliza resultado para A/V/E
+  function normalizeResult(raw) {
+    const s = (raw || '').toLowerCase();
+    if (s === 'player' || s === 'p' || s === 'blue' || s.includes('player') || s.includes('azul')) return 'A';
+    if (s === 'banker' || s === 'b' || s === 'red' || s.includes('banker') || s.includes('banca') || s.includes('vermelho')) return 'V';
+    if (s === 'tie' || s === 't' || s === 'green' || s.includes('tie') || s.includes('empate')) return 'E';
     return null;
   }
 
-  function isBettingPhase() {
-    const betButtons = document.querySelectorAll(
-      '[class*="player-bet"]:not([disabled]), [class*="banker-bet"]:not([disabled]), button[class*="bet"]:not([disabled])'
-    );
-    return betButtons.length > 0;
+  // Estrategia 1: data-result attributes (mais comum no Evolution)
+  function extractByDataResult() {
+    const results = [];
+    document.querySelectorAll('[data-result], [data-outcome]').forEach(el => {
+      const r = el.getAttribute('data-result') || el.getAttribute('data-outcome') || '';
+      const n = normalizeResult(r);
+      if (n) results.push(n);
+    });
+    return results;
   }
 
-  function monitorGame() {
-    const results = extractResults();
-    const latestResult = extractLatestResult();
-    const bettingPhase = isBettingPhase();
+  // Estrategia 2: SVG circles por fill color (bead road)
+  function extractBySVGFill() {
+    const results = [];
+    const circles = document.querySelectorAll('svg circle, svg ellipse');
+    circles.forEach(el => {
+      const fill = (el.getAttribute('fill') || el.style.fill || '').toLowerCase();
+      const r = el.getAttribute('r') || el.getAttribute('rx') || '0';
+      if (parseFloat(r) < 3) return; // ignora circulos muito pequenos
+      if (fill.includes('#0') || fill.includes('blue') || fill === 'rgb(0,0,255)' || fill.includes('3b82') || fill.includes('1d4e')) {
+        results.push('A');
+      } else if (fill.includes('red') || fill.includes('#e') || fill.includes('ef44') || fill.includes('dc26') || fill === 'rgb(255,0,0)') {
+        results.push('V');
+      } else if (fill.includes('green') || fill.includes('#0f') || fill.includes('22c5') || fill === 'rgb(0,128,0)') {
+        results.push('E');
+      }
+    });
+    return results;
+  }
 
-    const currentHash = results.join('|') + '#' + (latestResult ? latestResult.result : '');
-    const changed = (currentHash !== lastHistoryHash) || (results.length !== lastResultCount);
+  // Estrategia 3: CSS classes (player/banker/tie)
+  function extractByCSS() {
+    const results = [];
+    const selectors = [
+      '.bead-road-cell', '.road-cell', '.result-bead',
+      '[class*="player"]', '[class*="banker"]', '[class*="tie"]',
+      '[class*="Player"]', '[class*="Banker"]', '[class*="Tie"]'
+    ];
+    const seen = new Set();
+    selectors.forEach(sel => {
+      try {
+        document.querySelectorAll(sel).forEach(el => {
+          if (seen.has(el)) return;
+          seen.add(el);
+          const cls = (el.className || '').toLowerCase();
+          if (cls.includes('player') || cls.includes('azul')) results.push('A');
+          else if (cls.includes('banker') || cls.includes('banca')) results.push('V');
+          else if (cls.includes('tie') || cls.includes('empate')) results.push('E');
+        });
+      } catch(e) {}
+    });
+    return results;
+  }
 
-    if (changed && results.length > 0) {
-      lastResultCount = results.length;
-      lastHistoryHash = currentHash;
+  // Estrategia 4: texto visivel em celulas do road map
+  function extractByText() {
+    const results = [];
+    const cells = document.querySelectorAll('.road td, .bead td, [class*="road"] td, [class*="cell"]');
+    cells.forEach(el => {
+      const t = (el.textContent || '').trim().toUpperCase();
+      if (t === 'P' || t === 'J') results.push('A');
+      else if (t === 'B') results.push('V');
+      else if (t === 'T' || t === 'E') results.push('E');
+    });
+    return results;
+  }
 
-      // Mensagem rica (formato v2.4.0)
-      sendToParent('GAME_DATA_UPDATE', {
-        results: results.slice(-50),
-        latestResult,
-        bettingPhase,
-        totalRounds: results.length,
-        url: window.location.href
-      });
+  function getHistory() {
+    let results = extractByDataResult();
+    if (results.length < 4) results = extractBySVGFill();
+    if (results.length < 4) results = extractByCSS();
+    if (results.length < 4) results = extractByText();
+    return results;
+  }
 
-      // Mensagem simplificada (compat com qualquer consumidor que so escute ROUND_HISTORY)
-      sendToParent('ROUND_HISTORY', {
-        history: results.slice(-50),
-        latest: results[results.length - 1] || null,
-        total: results.length
-      });
+  function poll() {
+    const history = getHistory();
+    const hash = history.join('');
 
-      console.log('[Injected] Nova rodada - ' + results.slice(-5).join(' '));
+    if (hash && hash !== lastHash && history.length >= 4) {
+      lastHash = hash;
+      window.top.postMessage({
+        source: SOURCE,
+        type: 'NEW_HISTORY',
+        history: history,
+        latest: history[history.length - 1],
+        total: history.length
+      }, '*');
+      console.log('[Injected] Historico enviado: ' + history.slice(-6).join(' ') + ' (total=' + history.length + ')');
     }
-
-    if (bettingPhase) {
-      sendToParent('BETTING_PHASE_ACTIVE', { timestamp: Date.now() });
-    }
   }
 
-  function startMonitoring() {
-    if (pollTimer) clearInterval(pollTimer);
-    pollTimer = setInterval(monitorGame, POLL_INTERVAL);
+  // Inicia polling a cada 900ms
+  setInterval(poll, 900);
 
-    if (observer) observer.disconnect();
-    observer = new MutationObserver(monitorGame);
-    const target = document.body || document.documentElement;
-    if (target) {
-      observer.observe(target, {
-        childList: true,
-        subtree: true,
-        characterData: true,
-        attributes: true,
-        attributeFilter: ['class', 'style', 'data-result', 'fill']
-      });
-    }
+  console.log('[Injected] Autodrive IframeAgent ativo - Evolution Gaming');
 
-    sendToParent('AGENT_READY', { url: window.location.href, version: VERSION });
-    console.log('[Injected] Agente iniciado v' + VERSION + ' em ' + window.location.host);
-  }
-
-  function stop() {
-    if (pollTimer) clearInterval(pollTimer);
-    if (observer) observer.disconnect();
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', startMonitoring);
-  } else {
-    startMonitoring();
-  }
-
-  // Listener bidirecional - comandos do parent para o iframe
-  window.addEventListener('message', (event) => {
-    if (!event.data || event.data.target !== MSG_SOURCE) return;
-    if (event.data.command === 'GET_RESULTS') monitorGame();
-    if (event.data.command === 'STOP') stop();
-    if (event.data.command === 'START') startMonitoring();
-  });
-
-  window.AutodriveInjected = { start: startMonitoring, stop, extractResults, monitorGame };
 })();
-
-console.log('[Injected] Script carregado dentro do iframe Evolution');
