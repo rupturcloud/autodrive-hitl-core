@@ -1,0 +1,69 @@
+{
+  "manifest_version": 3,
+  "name": "Autodrive HITL Core",
+  "version": "2.4.0",
+  "description": "Engine de automação inteligente com HITL + Autodrive - Arquitetura profissional",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting",
+    "debugger"
+  ],
+  "host_permissions": [
+    "*://*.betboom.com/*",
+    "*://*.betboom.bet.br/*",
+    "*://br.betboom.com/*",
+    "*://*.betboom.mx/*",
+    "*://*.evo-games.com/*",
+    "*://*.evolution.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "js/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.betboom.com/*",
+        "*://*.betboom.bet.br/*",
+        "*://br.betboom.com/*",
+        "*://*.betboom.mx/*"
+      ],
+      "js": [
+        "js/infra-guardrails.js",
+        "js/config.js",
+        "js/history-store.js",
+        "js/history-normalizer.js",
+        "js/patterns.js",
+        "js/conviction-engine.js",
+        "js/consensus-engine.js",
+        "js/context-health-engine.js",
+        "js/interaction-intelligence.js",
+        "js/executor.js",
+        "js/decision.js",
+        "js/overlay.js",
+        "js/content.js"
+      ],
+      "css": ["css/overlay.css"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["js/injected.js"],
+      "matches": ["*://*.betboom.com/*"]
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
