@@ -1,0 +1,280 @@
+/**
+ * Autodrive HITL Core - Overlay CSS v2.4
+ * Estilos premium para o overlay HITL
+ * UI/UX mantida identica - motor interno reconstruido
+ */
+
+/* === Overlay Container === */
+#autodrive-hitl-overlay {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  width: 360px;
+  max-height: 90vh;
+  background: rgba(10, 10, 20, 0.97);
+  color: #ffffff;
+  border-radius: 16px;
+  border: 1px solid #2196F3;
+  box-shadow: 0 8px 32px rgba(33, 150, 243, 0.4), 0 0 0 1px rgba(33, 150, 243, 0.1);
+  z-index: 999999;
+  overflow: hidden;
+  font-family: 'Roboto', 'Segoe UI', -apple-system, sans-serif;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: all 0.3s ease;
+  user-select: none;
+}
+
+/* === Header === */
+#autodrive-hitl-overlay .overlay-header {
+  background: linear-gradient(135deg, #1a237e 0%, #0d47a1 100%);
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-radius: 16px 16px 0 0;
+  flex-shrink: 0;
+}
+
+/* === Status Panel === */
+.hitl-status-panel {
+  background: rgba(33, 150, 243, 0.1);
+  border: 1px solid rgba(33, 150, 243, 0.3);
+  border-radius: 10px;
+  padding: 10px;
+  transition: all 0.3s ease;
+}
+
+/* === State Badge === */
+.hitl-state-badge {
+  border-radius: 20px;
+  padding: 3px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  display: inline-block;
+  transition: all 0.3s ease;
+}
+
+/* === Suggestion Panel (HITL) === */
+.hitl-suggestion-panel {
+  background: rgba(255, 152, 0, 0.15);
+  border: 2px solid #FF9800;
+  border-radius: 12px;
+  padding: 14px;
+  text-align: center;
+  animation: hitlPulse 1s ease-in-out infinite;
+  display: none;
+}
+
+@keyframes hitlPulse {
+  0%, 100% { border-color: #FF9800; box-shadow: 0 0 0 0 rgba(255, 152, 0, 0.4); }
+  50% { border-color: #FFB74D; box-shadow: 0 0 0 6px rgba(255, 152, 0, 0); }
+}
+
+.hitl-suggestion-panel.visible {
+  display: block;
+}
+
+/* === HITL Buttons === */
+.btn-hitl-confirmar {
+  background: linear-gradient(135deg, #2e7d32, #388e3c) !important;
+  color: #fff !important;
+  border: none !important;
+  border-radius: 10px !important;
+  padding: 10px 24px !important;
+  cursor: pointer !important;
+  font-size: 14px !important;
+  font-weight: 800 !important;
+  flex: 1 !important;
+  transition: all 0.2s ease !important;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.3) !important;
+}
+
+.btn-hitl-confirmar:hover {
+  background: linear-gradient(135deg, #388e3c, #43a047) !important;
+  transform: translateY(-1px) !important;
+  box-shadow: 0 4px 12px rgba(46, 125, 50, 0.5) !important;
+}
+
+.btn-hitl-cancelar {
+  background: linear-gradient(135deg, #b71c1c, #c62828) !important;
+  color: #fff !important;
+  border: none !important;
+  border-radius: 10px !important;
+  padding: 10px 24px !important;
+  cursor: pointer !important;
+  font-size: 14px !important;
+  font-weight: 800 !important;
+  flex: 1 !important;
+  transition: all 0.2s ease !important;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.3) !important;
+}
+
+.btn-hitl-cancelar:hover {
+  background: linear-gradient(135deg, #c62828, #d32f2f) !important;
+  transform: translateY(-1px) !important;
+  box-shadow: 0 4px 12px rgba(183, 28, 28, 0.5) !important;
+}
+
+/* === Countdown === */
+.hitl-countdown {
+  font-size: 14px;
+  font-weight: 700;
+  transition: color 0.3s ease;
+}
+
+.hitl-countdown.urgent {
+  color: #f44336 !important;
+  animation: urgentBlink 0.5s ease-in-out infinite;
+}
+
+@keyframes urgentBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* === Bankroll Grid === */
+.hitl-bankroll-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+  text-align: center;
+}
+
+.hitl-bankroll-cell {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 8px 4px;
+  transition: background 0.3s ease;
+}
+
+.hitl-bankroll-cell:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* === Tabuleiro === */
+.hitl-tabuleiro {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  max-height: 80px;
+  overflow-y: auto;
+}
+
+.hitl-cell-player { background: #1565C0; }
+.hitl-cell-banker { background: #C62828; }
+.hitl-cell-tie { background: #F9A825; }
+
+.hitl-tabuleiro-cell {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 700;
+  color: #fff;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+.hitl-tabuleiro-cell:hover {
+  transform: scale(1.2);
+}
+
+/* === Log === */
+.hitl-log {
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: 8px;
+  padding: 8px;
+  font-size: 11px;
+  color: #aaa;
+  max-height: 80px;
+  overflow-y: auto;
+  font-family: 'Consolas', 'Monaco', monospace;
+  line-height: 1.4;
+}
+
+.hitl-log::-webkit-scrollbar { width: 3px; }
+.hitl-log::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
+.hitl-log::-webkit-scrollbar-thumb { background: #2196F3; border-radius: 3px; }
+
+/* === Control Buttons === */
+.hitl-ctrl-btn {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.hitl-ctrl-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* === Start/Stop Buttons in Header === */
+.hitl-btn-start {
+  background: #2e7d32 !important;
+  color: #fff !important;
+  border: none !important;
+  border-radius: 6px !important;
+  padding: 4px 10px !important;
+  cursor: pointer !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+}
+
+.hitl-btn-stop {
+  background: #b71c1c !important;
+  color: #fff !important;
+  border: none !important;
+  border-radius: 6px !important;
+  padding: 4px 10px !important;
+  cursor: pointer !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+}
+
+/* === Conviction Display === */
+.hitl-conviction-display {
+  font-size: 22px;
+  font-weight: 900;
+  transition: color 0.3s ease;
+}
+
+/* === Explanation Text === */
+.hitl-explanation {
+  font-size: 12px;
+  color: #90CAF9;
+  min-height: 30px;
+  line-height: 1.4;
+  transition: all 0.3s ease;
+}
+
+/* === Section labels === */
+.hitl-section-label {
+  font-size: 10px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 6px;
+}
+
+/* === Responsive adjustments === */
+@media (max-width: 480px) {
+  #autodrive-hitl-overlay {
+    width: 300px;
+    right: 5px;
+    top: 5px;
+  }
+}
